@@ -414,19 +414,27 @@ def check_union(
     memo: TypeCheckMemo,
 ) -> None:
     errors: dict[str, TypeCheckError] = {}
-    try:
-        for type_ in args:
-            try:
-                check_type_internal(value, type_, memo)
-                return
-            except TypeCheckError as exc:
-                errors[get_type_name(type_)] = exc
+    for type_ in args:
+        try:
+            check_type_internal(value, type_, memo)
+            # Each `exc` in `errors` has a reference cycle back to itself  via
+            # `exc.__traceback__`, which has captured `errors`, which contains
+            # `exc`. Such a cycle will delay deletion of each `exc` and all
+            # objects captured in their `__traceback__`s, until a GC run
+            # collects them. This would be bad, because `__traceback__` captures
+            # objects referred to by all local attrs up the whole call stack,
+            # and many of these objects would otherwise be deleted sooner by
+            # their reference counts going to zero. To avoid this problem, we
+            # clear `errors` to break the cycles before returning.
+            errors.clear()
+            return
+        except TypeCheckError as exc:
+            errors[get_type_name(type_)] = exc
 
-        formatted_errors = indent(
-            "\n".join(f"{key}: {error}" for key, error in errors.items()), "  "
-        )
-    finally:
-        del errors  # avoid creating ref cycle
+    formatted_errors = indent(
+        "\n".join(f"{key}: {error}" for key, error in errors.items()), "  "
+    )
+    errors.clear()  # Needed to break `exc` reference cycles.
     raise TypeCheckError(f"did not match any element in the union:\n{formatted_errors}")
 
 
@@ -440,6 +448,7 @@ def check_uniontype(
     for type_ in args:
         try:
             check_type_internal(value, type_, memo)
+            errors.clear()  # Needed to break `exc` reference cycles.
             return
         except TypeCheckError as exc:
             errors[get_type_name(type_)] = exc
@@ -447,6 +456,7 @@ def check_uniontype(
     formatted_errors = indent(
         "\n".join(f"{key}: {error}" for key, error in errors.items()), "  "
     )
+    errors.clear()  # Needed to break `exc` reference cycles.
     raise TypeCheckError(f"did not match any element in the union:\n{formatted_errors}")
 
 
@@ -481,6 +491,7 @@ def check_class(
 
             try:
                 check_class(value, type, (arg,), memo)
+                errors.clear()  # Needed to break `exc` reference cycles.
                 return
             except TypeCheckError as exc:
                 errors[get_type_name(arg)] = exc
@@ -488,6 +499,7 @@ def check_class(
             formatted_errors = indent(
                 "\n".join(f"{key}: {error}" for key, error in errors.items()), "  "
             )
+            errors.clear()  # Needed to break `exc` reference cycles.
             raise TypeCheckError(
                 f"did not match any element in the union:\n{formatted_errors}"
             )
